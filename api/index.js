@@ -1,6 +1,7 @@
 // src/serverApp.ts
 import express from "express";
 import dotenv from "dotenv";
+import compression from "compression";
 import { GoogleGenAI as GoogleGenAI2 } from "@google/genai";
 
 // src/actionRegistry.ts
@@ -127,11 +128,18 @@ var ACTION_REGISTRY = {
     category: "COMMUNICATION"
   }
 };
-function sanitizeUnregisteredParams(params) {
-  if (!params) return {};
+function sanitizeParameters(params, allowedKeys) {
   const sanitized = {};
+  if (!params) return sanitized;
   for (const [key, value] of Object.entries(params)) {
-    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") {
+      continue;
+    }
+    if (!allowedKeys) {
+      sanitized[key] = value;
+    } else if (allowedKeys.includes(key)) {
+      sanitized[key] = value;
+    } else if (key.startsWith("extra_") && typeof value === "string") {
       sanitized[key] = value;
     }
   }
@@ -151,25 +159,12 @@ function validateAndRegisterAction(rawAction, index) {
       risk: "HIGH",
       autoExecute: false,
       status: "REJECTED",
-      parameters: sanitizeUnregisteredParams(rawAction.suggestedParameters),
+      parameters: sanitizeParameters(rawAction.suggestedParameters),
       registryVerified: false,
       isSimulated: true
     };
   }
-  const sanitizedParams = {};
-  if (rawAction.suggestedParameters) {
-    for (const key of registered.allowedParams) {
-      const value = rawAction.suggestedParameters[key];
-      if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-        sanitizedParams[key] = value;
-      }
-    }
-    for (const [k, v] of Object.entries(rawAction.suggestedParameters)) {
-      if (k.startsWith("extra_") && typeof v === "string") {
-        sanitizedParams[k] = v;
-      }
-    }
-  }
+  const sanitizedParams = sanitizeParameters(rawAction.suggestedParameters, registered.allowedParams);
   let initialStatus = "AWAITING_CONFIRMATION";
   let executionLogs = void 0;
   let executedAt = void 0;
@@ -206,6 +201,20 @@ function validateAndRegisterAction(rawAction, index) {
 
 // src/geminiEngine.ts
 import { Type } from "@google/genai";
+
+// src/constants.ts
+var MAX_INPUT_LENGTH = 4e3;
+var MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+var MAX_IMAGE_BASE64_CHARS = Math.ceil(MAX_IMAGE_BYTES * 4 / 3) + 4096;
+var MAX_BODY_BYTES = "12mb";
+var ALLOWED_IMAGE_MIME_TYPES = ["image/jpeg", "image/png", "image/webp"];
+var DEFAULT_CONFIDENCE = 0.94;
+var DEFAULT_INTENT_CATEGORY = "GENERAL_ASSISTANCE";
+var DEFAULT_PRIMARY_INTENT = "General Real-World Request";
+var CONFIDENCE_MIN = 0;
+var CONFIDENCE_MAX = 1;
+
+// src/geminiEngine.ts
 var ANALYSIS_RESPONSE_SCHEMA = {
   type: Type.OBJECT,
   properties: {
@@ -300,6 +309,106 @@ var GEMINI_CANDIDATE_MODELS = [
   "gemini-3.1-flash-lite",
   "gemini-flash-latest"
 ];
+function isNonEmptyString(value) {
+  return typeof value === "string" && value.trim().length > 0;
+}
+function clampConfidence(value) {
+  if (typeof value !== "number" || Number.isNaN(value)) return DEFAULT_CONFIDENCE;
+  return Math.min(CONFIDENCE_MAX, Math.max(CONFIDENCE_MIN, value));
+}
+function normalizeEntities(value) {
+  if (!Array.isArray(value)) return void 0;
+  const entities = [];
+  for (const item of value) {
+    if (typeof item !== "object" || item === null) continue;
+    const record = item;
+    const category = isNonEmptyString(record.category) ? record.category : void 0;
+    const label = isNonEmptyString(record.label) ? record.label : void 0;
+    const entityValue = isNonEmptyString(record.value) ? record.value : void 0;
+    if (!category || !label || !entityValue) continue;
+    const source = record.source === "USER_PROVIDED" || record.source === "AI_INFERRED" ? record.source : "AI_INFERRED";
+    entities.push({
+      category,
+      label,
+      value: entityValue,
+      source
+    });
+  }
+  return entities;
+}
+function normalizeAmbiguities(value) {
+  if (!Array.isArray(value)) return void 0;
+  const ambiguities = [];
+  for (const item of value) {
+    if (typeof item !== "object" || item === null) continue;
+    const record = item;
+    const description = isNonEmptyString(record.description) ? record.description : void 0;
+    const impact = typeof record.impact === "string" ? record.impact : void 0;
+    const recommendedVerification = typeof record.recommendedVerification === "string" ? record.recommendedVerification : void 0;
+    if (description && impact && recommendedVerification) {
+      ambiguities.push({ description, impact, recommendedVerification });
+    }
+  }
+  return ambiguities;
+}
+function normalizeVerificationFacts(value) {
+  if (!Array.isArray(value)) return void 0;
+  const facts = [];
+  for (const item of value) {
+    if (typeof item !== "object" || item === null) continue;
+    const record = item;
+    const claim = isNonEmptyString(record.claim) ? record.claim : void 0;
+    if (!claim) continue;
+    const status = record.status === "CONFIRMED" || record.status === "NEEDS_CONFIRMATION" || record.status === "UNKNOWN" ? record.status : "UNKNOWN";
+    const sourceType = record.sourceType === "USER_PROVIDED" || record.sourceType === "AI_INFERRED" || record.sourceType === "SYSTEM_VERIFIED" || record.sourceType === "DEMO_DATA" ? record.sourceType : "AI_INFERRED";
+    facts.push({
+      claim,
+      status,
+      sourceType,
+      notes: typeof record.notes === "string" ? record.notes : ""
+    });
+  }
+  return facts;
+}
+function normalizeProposedActions(value) {
+  if (!Array.isArray(value)) return void 0;
+  const actions = [];
+  for (const item of value) {
+    if (typeof item !== "object" || item === null) continue;
+    const record = item;
+    const actionName = typeof record.actionName === "string" ? record.actionName : void 0;
+    if (!actionName) continue;
+    const rationale = typeof record.rationale === "string" ? record.rationale : void 0;
+    const suggestedParameters = typeof record.suggestedParameters === "object" && record.suggestedParameters !== null ? record.suggestedParameters : void 0;
+    const proposed = { actionName };
+    if (rationale !== void 0) proposed.rationale = rationale;
+    if (suggestedParameters !== void 0) proposed.suggestedParameters = suggestedParameters;
+    actions.push(proposed);
+  }
+  return actions;
+}
+function normalizeGeminiAnalysis(input) {
+  if (typeof input !== "object" || input === null) return {};
+  const record = input;
+  const normalized = {
+    understoodSummary: isNonEmptyString(record.understoodSummary) ? record.understoodSummary : void 0,
+    primaryIntent: isNonEmptyString(record.primaryIntent) ? record.primaryIntent : void 0,
+    confidence: clampConfidence(record.confidence),
+    intentCategory: isNonEmptyString(record.intentCategory) ? record.intentCategory : DEFAULT_INTENT_CATEGORY
+  };
+  if (typeof record.safetyAdvisory === "string") {
+    normalized.safetyAdvisory = record.safetyAdvisory;
+  }
+  const entities = normalizeEntities(record.entities);
+  if (entities !== void 0) normalized.entities = entities;
+  const ambiguities = normalizeAmbiguities(record.ambiguities);
+  if (ambiguities !== void 0) normalized.ambiguities = ambiguities;
+  const verificationFacts = normalizeVerificationFacts(record.verificationFacts);
+  if (verificationFacts !== void 0) normalized.verificationFacts = verificationFacts;
+  const proposedActions = normalizeProposedActions(record.proposedActions);
+  if (proposedActions !== void 0) normalized.proposedActions = proposedActions;
+  return normalized;
+}
 function isTransientGeminiError(message) {
   return message.includes("503") || message.includes("UNAVAILABLE") || message.includes("429") || message.includes("RESOURCE_EXHAUSTED") || message.includes("high demand") || message.includes("temporarily");
 }
@@ -327,8 +436,8 @@ async function callGeminiWithResilience(ai, contents, systemInstruction) {
           }
         });
         const rawText = response.text?.trim() || "{}";
-        const parsed = JSON.parse(rawText);
-        return { parsed, modelUsed: model };
+        const rawParsed = JSON.parse(rawText);
+        return { parsed: normalizeGeminiAnalysis(rawParsed), modelUsed: model };
       } catch (err) {
         lastError = err;
         const message = getErrorMessage(err);
@@ -749,9 +858,17 @@ function generateSyntheticAnalysis(text, imageAttached) {
 }
 
 // src/serverApp.ts
-dotenv.config();
+dotenv.config({ path: [".env.local", ".env"] });
 var app = express();
-app.use(express.json({ limit: "25mb" }));
+app.disable("x-powered-by");
+app.use(compression());
+app.use(express.json({ limit: MAX_BODY_BYTES }));
+app.use((_req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  next();
+});
 var aiClient = null;
 function getGeminiClient() {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -778,150 +895,162 @@ var handleHealth = (_req, res) => {
 };
 app.get("/api/health", handleHealth);
 app.get("/health", handleHealth);
+function resolveInputPayload(body) {
+  const { text, image } = body;
+  if (typeof text !== "string" || !text.trim()) {
+    return { error: "Text input is required." };
+  }
+  if (text.length > MAX_INPUT_LENGTH) {
+    return { error: `Input text exceeds the ${MAX_INPUT_LENGTH} character limit.` };
+  }
+  const imageData = typeof image?.data === "string" && image.data ? image.data : void 0;
+  if (typeof image?.mimeType === "string" && image.mimeType && imageData) {
+    const allowed = ALLOWED_IMAGE_MIME_TYPES;
+    if (!allowed.includes(image.mimeType)) {
+      return { error: "Unsupported image format. Allowed: image/jpeg, image/png, image/webp." };
+    }
+  }
+  if (imageData !== void 0 && imageData.length > MAX_IMAGE_BASE64_CHARS) {
+    return { error: "Image payload exceeds the 8 MB limit." };
+  }
+  const mimeType = typeof image?.mimeType === "string" && image.mimeType ? image.mimeType : "image/jpeg";
+  return {
+    text,
+    image: imageData ? { data: imageData, mimeType } : void 0,
+    imageAttached: Boolean(imageData)
+  };
+}
 var handleAnalyzeIntent = async (req, res) => {
-  try {
-    const { text, image } = req.body;
-    if (typeof text !== "string" || !text.trim()) {
-      return res.status(400).json({ error: "Text input is required." });
-    }
-    const imageAttached = Boolean(image && image.data);
-    const ai = getGeminiClient();
-    if (!ai) {
-      console.log("[NexusAct Engine] No GEMINI_API_KEY detected. Running deterministic safety engine.");
-      const fallbackResult = generateSyntheticAnalysis(text, imageAttached);
-      return res.json(fallbackResult);
-    }
-    const allowedActionList = Object.keys(ACTION_REGISTRY);
-    const contents = imageAttached ? [
-      {
-        inlineData: {
-          mimeType: typeof image?.mimeType === "string" ? image.mimeType : "image/jpeg",
-          data: String(image?.data)
-        }
-      },
-      { text: `Analyze this messy human input:
-"""${text}"""
-
-Allowed actionNames: ${allowedActionList.join(", ")}` }
-    ] : [{ text: `Analyze this messy human input:
-"""${text}"""
-
-Allowed actionNames: ${allowedActionList.join(", ")}` }];
-    let parsed;
-    let modelUsed = "gemini-3.8-flash";
-    try {
-      const result2 = await callGeminiWithResilience(ai, contents, GEMINI_SYSTEM_INSTRUCTION);
-      parsed = result2.parsed;
-      modelUsed = result2.modelUsed;
-    } catch (genAiError) {
-      const message = genAiError instanceof Error ? genAiError.message : String(genAiError);
-      console.warn(
-        `[NexusAct Engine] Gemini models temporarily unreachable (${message}). Falling back to deterministic intelligence engine.`
-      );
-      const fallbackResult = generateSyntheticAnalysis(text, imageAttached);
-      return res.json(fallbackResult);
-    }
-    const rawActions = Array.isArray(parsed.proposedActions) ? parsed.proposedActions : [];
-    const actions = rawActions.map(
-      (raw, idx) => validateAndRegisterAction(raw, idx)
-    );
-    const now = /* @__PURE__ */ new Date();
-    const timestampStr = now.toLocaleTimeString();
-    const auditTrail = [
-      {
-        id: `audit-${Date.now()}-1`,
-        timestamp: timestampStr,
-        rawTime: now.getTime(),
-        stage: "01 INPUT RECEIVED",
-        type: "INTENT_RECEIVED",
-        message: `Messy human input packet ingested (${text.length} chars${imageAttached ? ", + visual inspection frame" : ""}).`,
-        severity: "info"
-      },
-      {
-        id: `audit-${Date.now()}-2`,
-        timestamp: new Date(now.getTime() + 300).toLocaleTimeString(),
-        rawTime: now.getTime() + 300,
-        stage: "02 UNDERSTANDING",
-        type: "GEMINI_SYNTHESIS",
-        message: `Gemini synthesis finished: "${parsed.primaryIntent}" (Confidence: ${Math.round((parsed.confidence || 0.95) * 100)}%). Model: ${modelUsed}.`,
-        severity: "success"
-      },
-      {
-        id: `audit-${Date.now()}-3`,
-        timestamp: new Date(now.getTime() + 600).toLocaleTimeString(),
-        rawTime: now.getTime() + 600,
-        stage: "03 STRUCTURING",
-        type: "ENTITIES_EXTRACTED",
-        message: `Structured ${parsed.entities?.length || 0} entities and identified ${parsed.ambiguities?.length || 0} critical ambiguities.`,
-        severity: "info"
-      },
-      {
-        id: `audit-${Date.now()}-4`,
-        timestamp: new Date(now.getTime() + 900).toLocaleTimeString(),
-        rawTime: now.getTime() + 900,
-        stage: "04 VERIFYING",
-        type: "SAFETY_VALIDATION",
-        message: `Action Registry evaluated ${actions.length} proposed operations. Safety boundaries enforced.`,
-        severity: "success"
-      }
-    ];
-    actions.forEach((act) => {
-      if (act.status === "AUTO_EXECUTED") {
-        auditTrail.push({
-          id: `audit-${Date.now()}-auto-${act.id}`,
-          timestamp: new Date(now.getTime() + 1100).toLocaleTimeString(),
-          rawTime: now.getTime() + 1100,
-          stage: "05 ACTION PLAN",
-          type: "AUTO_EXECUTED",
-          message: `LOW-RISK action [${act.actionName}] verified against registry and automatically executed.`,
-          severity: "success"
-        });
-      } else if (act.status === "AWAITING_CONFIRMATION") {
-        auditTrail.push({
-          id: `audit-${Date.now()}-med-${act.id}`,
-          timestamp: new Date(now.getTime() + 1200).toLocaleTimeString(),
-          rawTime: now.getTime() + 1200,
-          stage: "06 CONFIRMATION",
-          type: "CONFIRMATION_REQUIRED",
-          message: `MEDIUM-RISK action [${act.actionName}] held pending operator confirmation.`,
-          severity: "warning"
-        });
-      } else if (act.status === "AUTHORIZATION_REQUIRED") {
-        auditTrail.push({
-          id: `audit-${Date.now()}-high-${act.id}`,
-          timestamp: new Date(now.getTime() + 1300).toLocaleTimeString(),
-          rawTime: now.getTime() + 1300,
-          stage: "06 CONFIRMATION",
-          type: "AUTHORIZATION_REQUIRED",
-          message: `HIGH-RISK action [${act.actionName}] isolated in containment. Explicit human authorization required.`,
-          severity: "alert"
-        });
-      }
-    });
-    const result = {
-      understoodSummary: parsed.understoodSummary || "Intent received and interpreted.",
-      primaryIntent: parsed.primaryIntent || "General Real-World Request",
-      confidence: typeof parsed.confidence === "number" ? parsed.confidence : 0.94,
-      intentCategory: parsed.intentCategory || "GENERAL_ASSISTANCE",
-      entities: parsed.entities || [],
-      ambiguities: parsed.ambiguities || [],
-      verificationFacts: parsed.verificationFacts || [],
-      actions,
-      safetyAdvisory: parsed.safetyAdvisory,
-      rawInput: text,
-      auditTrail,
-      timestamp: now.toISOString(),
-      imageAttached,
-      modelUsed
-    };
-    return res.json(result);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.warn("[NexusAct Engine] Intent analysis caught unhandled exception, falling back:", message);
-    const fallbackText = typeof req.body?.text === "string" && req.body.text.trim() ? req.body.text : "Emergency incident";
-    const fallbackResult = generateSyntheticAnalysis(fallbackText, Boolean(req.body?.image));
+  const payload = resolveInputPayload(req.body);
+  if ("error" in payload) {
+    return res.status(400).json({ error: payload.error });
+  }
+  const { text, image, imageAttached } = payload;
+  const ai = getGeminiClient();
+  if (!ai) {
+    console.log("[NexusAct Engine] No GEMINI_API_KEY detected. Running deterministic safety engine.");
+    const fallbackResult = generateSyntheticAnalysis(text, imageAttached);
     return res.json(fallbackResult);
   }
+  const allowedActionList = Object.keys(ACTION_REGISTRY);
+  const promptText = `Analyze this messy human input:
+"""${text}"""
+
+Allowed actionNames: ${allowedActionList.join(", ")}`;
+  const contents = imageAttached && image ? [
+    { inlineData: { mimeType: image.mimeType, data: image.data } },
+    { text: promptText }
+  ] : [{ text: promptText }];
+  let parsed;
+  let modelUsed = "gemini-3.8-flash";
+  try {
+    const result2 = await callGeminiWithResilience(ai, contents, GEMINI_SYSTEM_INSTRUCTION);
+    parsed = result2.parsed;
+    modelUsed = result2.modelUsed;
+  } catch (genAiError) {
+    const message = genAiError instanceof Error ? genAiError.message : String(genAiError);
+    console.warn(
+      `[NexusAct Engine] Gemini models temporarily unreachable (${message}). Falling back to deterministic intelligence engine.`
+    );
+    const fallbackResult = generateSyntheticAnalysis(text, imageAttached);
+    return res.json(fallbackResult);
+  }
+  const rawActions = Array.isArray(parsed.proposedActions) ? parsed.proposedActions : [];
+  const actions = rawActions.map(
+    (raw, idx) => validateAndRegisterAction(raw, idx)
+  );
+  const now = /* @__PURE__ */ new Date();
+  const timestampStr = now.toLocaleTimeString();
+  const auditTrail = [
+    {
+      id: `audit-${Date.now()}-1`,
+      timestamp: timestampStr,
+      rawTime: now.getTime(),
+      stage: "01 INPUT RECEIVED",
+      type: "INTENT_RECEIVED",
+      message: `Messy human input packet ingested (${text.length} chars${imageAttached ? ", + visual inspection frame" : ""}).`,
+      severity: "info"
+    },
+    {
+      id: `audit-${Date.now()}-2`,
+      timestamp: new Date(now.getTime() + 300).toLocaleTimeString(),
+      rawTime: now.getTime() + 300,
+      stage: "02 UNDERSTANDING",
+      type: "GEMINI_SYNTHESIS",
+      message: `Gemini synthesis finished: "${parsed.primaryIntent ?? ""}" (Confidence: ${Math.round(
+        (typeof parsed.confidence === "number" ? parsed.confidence : DEFAULT_CONFIDENCE) * 100
+      )}%). Model: ${modelUsed}.`,
+      severity: "success"
+    },
+    {
+      id: `audit-${Date.now()}-3`,
+      timestamp: new Date(now.getTime() + 600).toLocaleTimeString(),
+      rawTime: now.getTime() + 600,
+      stage: "03 STRUCTURING",
+      type: "ENTITIES_EXTRACTED",
+      message: `Structured ${parsed.entities?.length || 0} entities and identified ${parsed.ambiguities?.length || 0} critical ambiguities.`,
+      severity: "info"
+    },
+    {
+      id: `audit-${Date.now()}-4`,
+      timestamp: new Date(now.getTime() + 900).toLocaleTimeString(),
+      rawTime: now.getTime() + 900,
+      stage: "04 VERIFYING",
+      type: "SAFETY_VALIDATION",
+      message: `Action Registry evaluated ${actions.length} proposed operations. Safety boundaries enforced.`,
+      severity: "success"
+    }
+  ];
+  actions.forEach((act) => {
+    if (act.status === "AUTO_EXECUTED") {
+      auditTrail.push({
+        id: `audit-${Date.now()}-auto-${act.id}`,
+        timestamp: new Date(now.getTime() + 1100).toLocaleTimeString(),
+        rawTime: now.getTime() + 1100,
+        stage: "05 ACTION PLAN",
+        type: "AUTO_EXECUTED",
+        message: `LOW-RISK action [${act.actionName}] verified against registry and automatically executed.`,
+        severity: "success"
+      });
+    } else if (act.status === "AWAITING_CONFIRMATION") {
+      auditTrail.push({
+        id: `audit-${Date.now()}-med-${act.id}`,
+        timestamp: new Date(now.getTime() + 1200).toLocaleTimeString(),
+        rawTime: now.getTime() + 1200,
+        stage: "06 CONFIRMATION",
+        type: "CONFIRMATION_REQUIRED",
+        message: `MEDIUM-RISK action [${act.actionName}] held pending operator confirmation.`,
+        severity: "warning"
+      });
+    } else if (act.status === "AUTHORIZATION_REQUIRED") {
+      auditTrail.push({
+        id: `audit-${Date.now()}-high-${act.id}`,
+        timestamp: new Date(now.getTime() + 1300).toLocaleTimeString(),
+        rawTime: now.getTime() + 1300,
+        stage: "06 CONFIRMATION",
+        type: "AUTHORIZATION_REQUIRED",
+        message: `HIGH-RISK action [${act.actionName}] isolated in containment. Explicit human authorization required.`,
+        severity: "alert"
+      });
+    }
+  });
+  const result = {
+    understoodSummary: parsed.understoodSummary || "Intent received and interpreted.",
+    primaryIntent: parsed.primaryIntent || DEFAULT_PRIMARY_INTENT,
+    confidence: typeof parsed.confidence === "number" ? parsed.confidence : DEFAULT_CONFIDENCE,
+    intentCategory: parsed.intentCategory || DEFAULT_INTENT_CATEGORY,
+    entities: parsed.entities || [],
+    ambiguities: parsed.ambiguities || [],
+    verificationFacts: parsed.verificationFacts || [],
+    actions,
+    safetyAdvisory: parsed.safetyAdvisory,
+    rawInput: text,
+    auditTrail,
+    timestamp: now.toISOString(),
+    imageAttached,
+    modelUsed
+  };
+  return res.json(result);
 };
 app.post("/api/analyze-intent", handleAnalyzeIntent);
 app.post("/analyze-intent", handleAnalyzeIntent);
@@ -932,9 +1061,14 @@ var handleExecuteAction = (req, res) => {
   if (!definition) {
     return res.status(400).json({ error: "Unknown action rejected by registry safety policy." });
   }
-  if (definition.risk === "HIGH" && !authConfirmed) {
-    return res.status(403).json({ error: "High-risk actions require explicit authorized human confirmation." });
+  const confirmed = authConfirmed === true;
+  if (definition.risk !== "LOW" && !confirmed) {
+    return res.status(403).json({ error: "Consequential actions require explicit authorized human confirmation." });
   }
+  const sanitizedParams = sanitizeParameters(
+    typeof parameters === "object" && parameters !== null ? parameters : void 0,
+    definition.allowedParams
+  );
   const now = /* @__PURE__ */ new Date();
   const logs = [
     `[${now.toLocaleTimeString()}] AUTHORIZATION RECEIVED \u2713 - Authenticated operator token verified`,
@@ -949,8 +1083,8 @@ var handleExecuteAction = (req, res) => {
     rawTime: now.getTime(),
     stage: "07 EXECUTION",
     type: "EXECUTION_COMPLETED",
-    message: `Action [${actionName}] simulated execution completed under operator authorization.`,
-    metadata: { actionId, actionName, parameters },
+    message: `Action [${name}] simulated execution completed under operator authorization.`,
+    metadata: { actionId, actionName: name, parameters: sanitizedParams },
     severity: "success"
   };
   return res.json({
@@ -965,6 +1099,26 @@ var handleExecuteAction = (req, res) => {
 };
 app.post("/api/execute-action", handleExecuteAction);
 app.post("/execute-action", handleExecuteAction);
+app.use("/api", (_req, res) => {
+  res.status(404).json({ error: "Not found." });
+});
+app.use((err, _req, res, next) => {
+  if (res.headersSent) {
+    next(err);
+    return;
+  }
+  const errType = err?.type;
+  if (errType === "entity.parse.failed") {
+    res.status(400).json({ error: "Invalid JSON payload." });
+    return;
+  }
+  if (errType === "entity.too.large") {
+    res.status(413).json({ error: "Request body too large." });
+    return;
+  }
+  console.error("[NexusAct Engine] Unhandled error:", err);
+  res.status(500).json({ error: "Unexpected server error." });
+});
 var serverApp_default = app;
 
 // src/apiEntry.ts

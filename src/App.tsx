@@ -84,10 +84,6 @@ export default function App() {
 
       const data: AnalysisResult = await response.json();
 
-      clearTimeout(timer1);
-      clearTimeout(timer2);
-      clearTimeout(timer3);
-
       setAnalysisResult(data);
       setPipelineStage(5);
 
@@ -100,6 +96,9 @@ export default function App() {
       console.warn('Analysis note:', errMessage);
       setAnalysisError('Unable to connect to the analysis service. Please try submitting again or choose a demo scenario.');
     } finally {
+      clearTimeout(timer1);
+      clearTimeout(timer2);
+      clearTimeout(timer3);
       setIsAnalyzing(false);
     }
   };
@@ -145,6 +144,7 @@ export default function App() {
   };
 
   const handleAuthorizeHighRiskAction = async (action: ProcessedAction) => {
+    setIsProcessingAction(action.id);
     try {
       const response = await fetch('/api/execute-action', {
         method: 'POST',
@@ -156,6 +156,12 @@ export default function App() {
           authConfirmed: true,
         }),
       });
+
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        setAnalysisError(`Action execution failed: ${(body as { error?: string }).error || 'Server returned an error.'}`);
+        return;
+      }
 
       const data = await response.json();
 
@@ -183,6 +189,9 @@ export default function App() {
       setPipelineStage(7);
     } catch (err) {
       console.error('Execution simulation error:', err);
+      setAnalysisError('Unable to reach the action execution service. Please try again.');
+    } finally {
+      setIsProcessingAction(null);
     }
   };
 

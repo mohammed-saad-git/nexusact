@@ -16,6 +16,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { buildPlainTextReport } from '../reportBuilder';
 
 interface ResponseReportModalProps {
   isOpen: boolean;
@@ -57,12 +58,9 @@ export const ResponseReportModal: React.FC<ResponseReportModalProps> = ({
   // Extract entities & assessment
   const personEntity = result?.entities.find((e) => e.category === 'PERSON');
   const hazardEntity = result?.entities.find((e) => e.category === 'HAZARD');
-  const locationEntity = result?.entities.find((e) => e.category === 'LOCATION');
   const urgencyEntity = result?.entities.find((e) => e.category === 'URGENCY');
 
   const actions = result?.actions || [];
-  const autoExecutedActions = actions.filter((a) => a.status === 'AUTO_EXECUTED');
-  const authorizedActions = actions.filter((a) => a.status === 'COMPLETED' || a.status === 'CONFIRMED');
   const pendingActions = actions.filter(
     (a) =>
       a.status === 'AUTHORIZATION_REQUIRED' ||
@@ -72,7 +70,6 @@ export const ResponseReportModal: React.FC<ResponseReportModalProps> = ({
 
   const isPlanCompleted = pendingActions.length === 0 && actions.length > 0;
 
-  // Verified information & ambiguities
   const verifiedFacts = result?.verificationFacts.filter(
     (f) => f.status === 'CONFIRMED' || f.sourceType === 'SYSTEM_VERIFIED'
   ) || [];
@@ -87,105 +84,9 @@ export const ResponseReportModal: React.FC<ResponseReportModalProps> = ({
   const reportDate = result?.timestamp || new Date().toLocaleString();
   const reportRef = `INC-${Date.now().toString().slice(-6)}`;
   const title = result?.primaryIntent || (hazardEntity ? `${hazardEntity.value.toUpperCase()} EMERGENCY RESPONSE` : 'INCIDENT RESPONSE PLAN');
-
   const urgencyDisplay = urgencyEntity?.value || (hazardEntity ? 'HIGH' : 'MEDIUM');
 
-  // Format full text for copy / download
-  const generatePlainTextReport = () => {
-    return `=======================================================
-RESPONSE REPORT
-=======================================================
-INCIDENT REFERENCE: ${reportRef}
-DATE / TIME:        ${reportDate}
-CLASSIFICATION:     VERIFIED PROTOCOL // LIVE SIMULATION
-STATUS:             ${isPlanCompleted ? '✓ RESPONSE PLAN COMPLETED' : '⚠ PENDING HUMAN AUTHORIZATION'}
-
--------------------------------------------------------
-1. SITUATION SUMMARY
--------------------------------------------------------
-${rawInput || result?.rawInput || 'No raw situation text provided.'}
-
--------------------------------------------------------
-2. GEMINI ASSESSMENT & DEEP UNDERSTANDING
--------------------------------------------------------
-Primary Intent:  ${result?.primaryIntent || 'Emergency Assessment & Response'}
-Domain Category: ${result?.intentCategory || 'Emergency Logistics'}
-Confidence:      ${result?.confidence || 95}%
-Urgency:         ${urgencyDisplay.toUpperCase()}
-Hazard:          ${hazardEntity?.value || 'Active environmental / operational hazard'}
-Subject at Risk: ${personEntity?.value || 'Civilians in identified sector'}
-Location:        ${locationEntity?.value || 'Sector zone'}
-
-Operational Rationale:
-${result?.understoodSummary || 'Comprehensive intent analysis executed.'}
-
--------------------------------------------------------
-3. VERIFIED INFORMATION
--------------------------------------------------------
-${
-  verifiedFacts.length > 0
-    ? verifiedFacts.map((f) => `✓ [VERIFIED] ${f.claim}`).join('\n')
-    : '✓ Telemetry sensor feeds queried and active.\n✓ Registry constraints validated.'
-}
-
--------------------------------------------------------
-4. UNCERTAINTIES & AMBIGUITIES
--------------------------------------------------------
-${
-  unverifiedOrAmbiguities.length > 0
-    ? unverifiedOrAmbiguities.map((u) => `⚠ [NEEDS CONFIRMATION] ${u}`).join('\n')
-    : '⚠ Field coordinates subject to real-time responder validation.'
-}
-
--------------------------------------------------------
-5. ACTION GOVERNANCE & EXECUTION
--------------------------------------------------------
-Total Actions Proposed: ${actions.length}
-
-[AUTOMATICALLY COMPLETED]
-${
-  autoExecutedActions.length > 0
-    ? autoExecutedActions.map((a) => `✓ ${a.displayName} (Risk: ${a.risk}) - AUTO-EXECUTED`).join('\n')
-    : 'None'
-}
-
-[HUMAN AUTHORIZED]
-${
-  authorizedActions.length > 0
-    ? authorizedActions.map((a) => `✓ ${a.displayName} (Risk: ${a.risk}) - AUTHORIZED BY OPERATOR`).join('\n')
-    : 'None yet'
-}
-
-[PENDING AUTHORIZATION]
-${
-  pendingActions.length > 0
-    ? pendingActions.map((a) => `⚠ ${a.displayName} (Risk: ${a.risk}) - REQUIRES OPERATOR SIGN-OFF`).join('\n')
-    : 'None - All actions completed'
-}
-
-EXECUTION TELEMETRY:
-${actions
-  .flatMap((a) => a.executionLogs || [])
-  .map((log) => `  • ${log}`)
-  .join('\n') || '  • Application Registry validated parameter schema.'}
-
--------------------------------------------------------
-6. SAFETY NOTES & REGISTRY BOUNDARIES
--------------------------------------------------------
-${result?.safetyAdvisory || 'The code-governed Action Registry is the sovereign authority. Gemini cannot invent endpoints or bypass risk tiers. Low-risk operations execute automatically; consequential physical actions demand explicit human authorization.'}
-
--------------------------------------------------------
-7. FINAL OUTCOME
--------------------------------------------------------
-${
-  isPlanCompleted
-    ? 'A verified response plan was generated and fully executed with consequential actions protected by explicit human authorization.'
-    : 'A verified response plan was generated. Consequential high-risk actions are safeguarded and currently awaiting human authorization.'
-}
-
-[DEMO SIMULATION NOTICE: All external notifications, physical vehicle dispatches, and emergency calls are safely simulated in-memory.]
-=======================================================`;
-  };
+  const generatePlainTextReport = () => buildPlainTextReport({ result, rawInput });
 
   const handleCopyReport = () => {
     const text = generatePlainTextReport();

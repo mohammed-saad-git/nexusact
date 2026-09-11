@@ -124,17 +124,30 @@ export const ACTION_REGISTRY: Record<string, RegisteredActionDefinition> = {
   },
 };
 
+export type ParamValue = string | number | boolean;
+
 /**
- * Reduces arbitrary model-supplied parameters to primitive values so
- * rejected actions never carry unsanitized payloads into the UI or audit log.
+ * Reduces arbitrary model- or client-supplied parameters to safe primitive
+ * values. When an allowlist is provided, only those keys pass through, plus
+ * the explicit `extra_` escape hatch for string payloads explicitly flagged
+ * by the proposing agent. The registry therefore remains the boundary for
+ * arbitrary external data.
  */
-function sanitizeUnregisteredParams(
-  params?: Record<string, unknown>
-): Record<string, string | number | boolean> {
-  if (!params) return {};
-  const sanitized: Record<string, string | number | boolean> = {};
+export function sanitizeParameters(
+  params: Record<string, unknown> | undefined,
+  allowedKeys?: string[]
+): Record<string, ParamValue> {
+  const sanitized: Record<string, ParamValue> = {};
+  if (!params) return sanitized;
   for (const [key, value] of Object.entries(params)) {
-    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') {
+      continue;
+    }
+    if (!allowedKeys) {
+      sanitized[key] = value;
+    } else if (allowedKeys.includes(key)) {
+      sanitized[key] = value;
+    } else if (key.startsWith('extra_') && typeof value === 'string') {
       sanitized[key] = value;
     }
   }
@@ -176,30 +189,14 @@ export function validateAndRegisterAction(
       risk: 'HIGH',
       autoExecute: false,
       status: 'REJECTED',
-      parameters: sanitizeUnregisteredParams(rawAction.suggestedParameters),
+      parameters: sanitizeParameters(rawAction.suggestedParameters),
       registryVerified: false,
       isSimulated: true,
     };
   }
 
   // Filter parameters to only those declared in the registry
-  const sanitizedParams: Record<string, string | number | boolean> = {};
-  if (rawAction.suggestedParameters) {
-    for (const key of registered.allowedParams) {
-      const value = rawAction.suggestedParameters[key];
-      if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
-        sanitizedParams[key] = value;
-      }
-    }
-    // Whitelisted escape hatch: additional params may pass through ONLY when
-    // explicitly prefixed with "extra_", so the registry remains the boundary
-    // for arbitrary model-supplied data.
-    for (const [k, v] of Object.entries(rawAction.suggestedParameters)) {
-      if (k.startsWith('extra_') && typeof v === 'string') {
-        sanitizedParams[k] = v;
-      }
-    }
-  }
+  const sanitizedParams = sanitizeParameters(rawAction.suggestedParameters, registered.allowedParams);
 
   // Canonical Risk determines execution status:
   // LOW -> AUTO_EXECUTED
