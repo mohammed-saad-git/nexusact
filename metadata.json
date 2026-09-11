@@ -1,0 +1,6 @@
+{
+  "name": "NEXUSACT",
+  "description": "Universal Intent → Action Engine. Turn messy human intent into verified, structured, safe, and auditable real-world action powered by Gemini.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
