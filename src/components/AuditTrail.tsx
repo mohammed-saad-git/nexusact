@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { AuditEvent } from '../types';
 import {
   X,
@@ -24,7 +24,24 @@ export const AuditTrail: React.FC<AuditTrailProps> = ({
   isDrawer = true,
 }) => {
   const [copied, setCopied] = useState(false);
-  const [filterSeverity] = useState<string>('ALL');
+  const filterSeverity = 'ALL';
+  const drawerRef = useRef<HTMLDivElement>(null);
+  const closeDrawer = useCallback(() => onClose(), [onClose]);
+
+  useEffect(() => {
+    if (isDrawer && isOpen) {
+      drawerRef.current?.focus();
+    }
+  }, [isDrawer, isOpen]);
+
+  useEffect(() => {
+    if (!isDrawer || !isOpen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') closeDrawer();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isDrawer, isOpen, closeDrawer]);
 
   if (isDrawer && !isOpen) return null;
 
@@ -78,7 +95,7 @@ export const AuditTrail: React.FC<AuditTrailProps> = ({
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <h3 className="text-sm font-bold tracking-tight text-stone-900 uppercase">
+              <h3 id="audit-trail-title" className="text-sm font-bold tracking-tight text-stone-900 uppercase">
                 AUDIT TRAIL & LEDGER
               </h3>
               <span className="rounded-full bg-amber-100 px-2 py-0.5 font-mono text-[10px] font-bold text-amber-900">
@@ -114,8 +131,9 @@ export const AuditTrail: React.FC<AuditTrailProps> = ({
 
           {isDrawer && (
             <button
-              onClick={onClose}
+              onClick={closeDrawer}
               className="rounded-xl p-1.5 text-stone-400 hover:bg-stone-100 hover:text-stone-700 cursor-pointer"
+              aria-label="Close audit trail"
             >
               <X className="h-5 w-5" />
             </button>
@@ -187,11 +205,16 @@ export const AuditTrail: React.FC<AuditTrailProps> = ({
       >
         <motion.div
           id="audit-trail-drawer"
+          ref={drawerRef}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="audit-trail-title"
+          tabIndex={-1}
           initial={{ x: '100%' }}
           animate={{ x: 0 }}
           exit={{ x: '100%' }}
           transition={{ type: 'spring', damping: 25, stiffness: 300 }}
-          className="h-full w-full max-w-md border-l border-stone-200 bg-white shadow-2xl"
+          className="h-full w-full max-w-md border-l border-stone-200 bg-white shadow-2xl outline-none"
           onClick={(e) => e.stopPropagation()}
         >
           {content}

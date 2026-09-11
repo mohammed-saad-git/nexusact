@@ -1,5 +1,5 @@
 import React from 'react';
-import { ShieldCheck, RotateCcw, FileCheck, Compass, Sparkles, BookOpen } from 'lucide-react';
+import { ShieldCheck, RotateCcw, FileCheck, Compass, Sparkles, BookOpen, Terminal } from 'lucide-react';
 import { motion } from 'motion/react';
 
 interface HeaderProps {
@@ -19,7 +19,6 @@ export const Header: React.FC<HeaderProps> = ({
   auditCount = 0,
   hasActiveResult,
 }) => {
-  const handleOpenReport = onOpenReport || onOpenAudit;
   const scrollToSection = (id: string) => {
     const elem = document.getElementById(id);
     if (elem) {
@@ -138,7 +137,7 @@ export const Header: React.FC<HeaderProps> = ({
             id="btn-open-response-report"
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.98 }}
-            onClick={handleOpenReport}
+            onClick={onOpenReport}
             className={`relative flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-semibold shadow-xs transition-colors cursor-pointer ${
               hasActiveResult
                 ? 'border-amber-300 bg-amber-50/90 text-amber-900 hover:bg-amber-100 hover:border-amber-400'
@@ -154,15 +153,31 @@ export const Header: React.FC<HeaderProps> = ({
               >
                 ✓ Ready
               </span>
-            ) : auditCount > 0 ? (
-              <span
-                id="report-counter-badge"
-                className="flex h-4 min-w-[16px] items-center justify-center rounded-full bg-amber-100 px-1 font-mono text-[10px] font-bold text-amber-800"
-              >
-                {auditCount}
-              </span>
             ) : null}
           </motion.button>
+
+          {/* Audit Ledger Drawer Button */}
+          {onOpenAudit && (
+            <motion.button
+              id="btn-open-audit-trail"
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
+              onClick={onOpenAudit}
+              className="relative flex items-center gap-1.5 rounded-xl border border-stone-200 bg-white px-3 py-1.5 text-xs font-semibold text-stone-700 shadow-xs hover:border-stone-300 hover:bg-stone-50 transition-colors cursor-pointer"
+              title="Open Compliance & Audit Ledger Drawer"
+            >
+              <Terminal className="h-4 w-4 text-amber-800" />
+              <span className="hidden md:inline">Audit Trail</span>
+              {auditCount > 0 && (
+                <span
+                  id="audit-counter-badge"
+                  className="flex h-4 min-w-[16px] items-center justify-center rounded-full bg-amber-100 px-1 font-mono text-[10px] font-bold text-amber-800"
+                >
+                  {auditCount}
+                </span>
+              )}
+            </motion.button>
+          )}
 
           {/* Reset button */}
           <motion.button

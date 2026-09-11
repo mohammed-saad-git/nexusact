@@ -81,7 +81,7 @@ export interface AuditEvent {
   stage: string;
   type: AuditEventType;
   message: string;
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
   severity: 'info' | 'success' | 'warning' | 'alert' | 'danger';
 }
 

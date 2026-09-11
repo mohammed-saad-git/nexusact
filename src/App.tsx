@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { Header } from './components/Header';
 import { Hero } from './components/Hero';
 import { DemoScenarios } from './components/DemoScenarios';
@@ -14,7 +14,7 @@ import { ResponseReportModal } from './components/ResponseReportModal';
 import { HowItWorks } from './components/HowItWorks';
 import { AboutSection } from './components/AboutSection';
 import { AnalysisResult, AuditEvent, DemoScenario, ProcessedAction } from './types';
-import { Terminal, ArrowRight, FileCheck, AlertCircle, X } from 'lucide-react';
+import { ArrowRight, FileCheck, AlertCircle, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 export default function App() {
@@ -95,8 +95,9 @@ export default function App() {
       if (data.auditTrail && data.auditTrail.length > 0) {
         setAuditLog((prev) => [...data.auditTrail, ...prev]);
       }
-    } catch (err: any) {
-      console.warn('Analysis note:', err?.message || err);
+    } catch (err) {
+      const errMessage = err instanceof Error ? err.message : String(err);
+      console.warn('Analysis note:', errMessage);
       setAnalysisError('Unable to connect to the analysis service. Please try submitting again or choose a demo scenario.');
     } finally {
       setIsAnalyzing(false);
@@ -192,19 +193,13 @@ export default function App() {
     setPipelineStage(0);
   };
 
-  const hasExecutedAny = Boolean(
-    analysisResult?.actions.some(
-      (a) => a.status === 'COMPLETED' || a.status === 'AUTO_EXECUTED'
-    )
-  );
-
   return (
     <div className="min-h-screen bg-[#fbf9f6] font-sans text-stone-800 selection:bg-amber-100 selection:text-amber-900">
       {/* 1. HEADER */}
       <Header
         geminiActive={geminiActive}
         onOpenReport={() => setIsReportOpen(true)}
-        onOpenAudit={() => setIsReportOpen(true)}
+        onOpenAudit={() => setIsAuditOpen(true)}
         onReset={handleReset}
         auditCount={auditLog.length}
         hasActiveResult={Boolean(analysisResult)}
@@ -268,7 +263,6 @@ export default function App() {
               <ProcessingPipeline
                 currentStageIndex={pipelineStage}
                 isAnalyzing={isAnalyzing}
-                hasExecutedAny={hasExecutedAny}
               />
             </motion.div>
           )}
@@ -364,7 +358,7 @@ export default function App() {
                   RESPONSE REPORT:
                 </span>
                 <span className="text-xs text-stone-600 font-medium">
-                  {analysisResult.primaryIntent} • Confidence: {analysisResult.confidence}%
+                  {analysisResult.primaryIntent} • Confidence: {Math.round(analysisResult.confidence * 100)}%
                 </span>
               </div>
               <motion.button

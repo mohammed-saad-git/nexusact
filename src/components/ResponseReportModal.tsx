@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { AnalysisResult, AuditEvent, ProcessedAction } from '../types';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { AnalysisResult, AuditEvent } from '../types';
 import {
   X,
   Download,
@@ -14,7 +14,6 @@ import {
   Terminal,
   Printer,
   Sparkles,
-  Info,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -35,6 +34,23 @@ export const ResponseReportModal: React.FC<ResponseReportModalProps> = ({
 }) => {
   const [copied, setCopied] = useState(false);
   const [showInternalAudit, setShowInternalAudit] = useState(false);
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  const closeDialog = useCallback(() => onClose(), [onClose]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    dialogRef.current?.focus();
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') closeDialog();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, closeDialog]);
 
   if (!isOpen) return null;
 
@@ -202,11 +218,16 @@ ${
       >
         <motion.div
           id="response-report-modal"
+          ref={dialogRef}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="response-report-modal-title"
+          tabIndex={-1}
           initial={{ opacity: 0, scale: 0.96, y: 15 }}
           animate={{ opacity: 1, scale: 1, y: 0 }}
           exit={{ opacity: 0, scale: 0.96, y: 15 }}
           transition={{ duration: 0.25, ease: 'easeOut' }}
-          className="relative max-h-[92vh] w-full max-w-4xl overflow-hidden rounded-3xl border border-stone-200/90 bg-[#faf8f5] shadow-2xl flex flex-col font-sans"
+          className="relative max-h-[92vh] w-full max-w-4xl overflow-hidden rounded-3xl border border-stone-200/90 bg-[#faf8f5] shadow-2xl flex flex-col font-sans outline-none"
           onClick={(e) => e.stopPropagation()}
         >
           {/* Top Bar / Controls */}
@@ -217,7 +238,7 @@ ${
               </div>
               <div>
                 <div className="flex items-center gap-2">
-                  <h2 className="text-sm font-black tracking-tight text-stone-900 uppercase">
+                  <h2 id="response-report-modal-title" className="text-sm font-black tracking-tight text-stone-900 uppercase">
                     RESPONSE REPORT
                   </h2>
                   <span className="rounded-full bg-stone-100 border border-stone-200 px-2 py-0.5 font-mono text-[10px] font-bold text-stone-600">
@@ -264,9 +285,10 @@ ${
               </button>
 
               <button
-                onClick={onClose}
+                onClick={closeDialog}
                 className="rounded-xl p-1.5 text-stone-400 hover:bg-stone-100 hover:text-stone-700 cursor-pointer"
                 title="Close report"
+                aria-label="Close response report"
               >
                 <X className="h-5 w-5" />
               </button>
@@ -317,7 +339,7 @@ ${
                     )}
 
                     <span className="rounded-full bg-stone-100 border border-stone-200 px-2.5 py-1 font-mono text-[10px] font-bold text-stone-700 uppercase">
-                      CONFIDENCE: {result.confidence}%
+                      CONFIDENCE: {Math.round(result.confidence * 100)}%
                     </span>
 
                     <span className="rounded-full bg-rose-50 border border-rose-200 px-2.5 py-1 font-mono text-[10px] font-bold text-rose-800 uppercase">
@@ -360,7 +382,7 @@ ${
                     </div>
                     <div>
                       <span className="text-stone-500 text-[11px] block font-medium">Confidence</span>
-                      <span className="font-bold text-amber-800 text-sm">{result.confidence}%</span>
+                      <span className="font-bold text-amber-800 text-sm">{Math.round(result.confidence * 100)}%</span>
                     </div>
                   </div>
 
@@ -434,7 +456,6 @@ ${
                     {actions.map((act) => {
                       const isAuto = act.status === 'AUTO_EXECUTED';
                       const isAuth = act.status === 'COMPLETED' || act.status === 'CONFIRMED';
-                      const isPending = !isAuto && !isAuth;
 
                       return (
                         <div

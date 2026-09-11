@@ -21,7 +21,6 @@ export const PIPELINE_STAGES: PipelineStageInfo[] = [
 interface ProcessingPipelineProps {
   currentStageIndex: number; // 0 to 7
   isAnalyzing: boolean;
-  hasExecutedAny: boolean;
 }
 
 export const ProcessingPipeline: React.FC<ProcessingPipelineProps> = ({

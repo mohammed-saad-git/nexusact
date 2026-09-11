@@ -125,6 +125,29 @@ export const ACTION_REGISTRY: Record<string, RegisteredActionDefinition> = {
 };
 
 /**
+ * Reduces arbitrary model-supplied parameters to primitive values so
+ * rejected actions never carry unsanitized payloads into the UI or audit log.
+ */
+function sanitizeUnregisteredParams(
+  params?: Record<string, unknown>
+): Record<string, string | number | boolean> {
+  if (!params) return {};
+  const sanitized: Record<string, string | number | boolean> = {};
+  for (const [key, value] of Object.entries(params)) {
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+      sanitized[key] = value;
+    }
+  }
+  return sanitized;
+}
+
+export interface ProposedActionInput {
+  actionName?: unknown;
+  rationale?: string;
+  suggestedParameters?: Record<string, unknown>;
+}
+
+/**
  * Validates a proposed action against the authoritative Action Registry.
  * The registry is the SOLE authority on:
  * - Validity
@@ -133,42 +156,46 @@ export const ACTION_REGISTRY: Record<string, RegisteredActionDefinition> = {
  * - Allowed parameters
  */
 export function validateAndRegisterAction(
-  rawAction: {
-    actionName: string;
-    rationale?: string;
-    suggestedParameters?: Record<string, any>;
-  },
+  rawAction: ProposedActionInput,
   index: number
 ): ProcessedAction {
-  const registered = ACTION_REGISTRY[rawAction.actionName];
+  const requestedName =
+    typeof rawAction.actionName === 'string' && rawAction.actionName.trim()
+      ? rawAction.actionName.trim()
+      : null;
+  const registered = requestedName ? ACTION_REGISTRY[requestedName] : undefined;
 
   if (!registered) {
+    const label = requestedName || 'UNKNOWN_ACTION';
     return {
       id: `act-rejected-${Date.now()}-${index}`,
-      actionName: rawAction.actionName || 'UNKNOWN_ACTION',
-      displayName: rawAction.actionName || 'Unknown Action',
+      actionName: label,
+      displayName: label,
       description: 'Action not found in authoritative application registry. Execution rejected by safety policy.',
       rationale: rawAction.rationale || 'Attempted to invoke unregistered action.',
       risk: 'HIGH',
       autoExecute: false,
       status: 'REJECTED',
-      parameters: rawAction.suggestedParameters || {},
+      parameters: sanitizeUnregisteredParams(rawAction.suggestedParameters),
       registryVerified: false,
       isSimulated: true,
     };
   }
 
   // Filter parameters to only those declared in the registry
-  const sanitizedParams: Record<string, any> = {};
+  const sanitizedParams: Record<string, string | number | boolean> = {};
   if (rawAction.suggestedParameters) {
     for (const key of registered.allowedParams) {
-      if (rawAction.suggestedParameters[key] !== undefined) {
-        sanitizedParams[key] = rawAction.suggestedParameters[key];
+      const value = rawAction.suggestedParameters[key];
+      if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+        sanitizedParams[key] = value;
       }
     }
-    // Include any additional suggested parameters prefixed with extra_
+    // Whitelisted escape hatch: additional params may pass through ONLY when
+    // explicitly prefixed with "extra_", so the registry remains the boundary
+    // for arbitrary model-supplied data.
     for (const [k, v] of Object.entries(rawAction.suggestedParameters)) {
-      if (!sanitizedParams[k] && typeof v === 'string') {
+      if (k.startsWith('extra_') && typeof v === 'string') {
         sanitizedParams[k] = v;
       }
     }

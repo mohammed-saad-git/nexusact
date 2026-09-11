@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { ProcessedAction } from '../types';
 import { AlertOctagon, CheckCircle2, Loader2, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -18,13 +18,27 @@ export const AuthorizationModal: React.FC<AuthorizationModalProps> = ({
 }) => {
   const [executionPhase, setExecutionPhase] = useState<'IDLE' | 'EXECUTING' | 'DONE'>('IDLE');
   const [execStep, setExecStep] = useState(0);
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  const closeIfIdle = useCallback(() => {
+    if (executionPhase !== 'EXECUTING') onClose();
+  }, [executionPhase, onClose]);
 
   useEffect(() => {
-    if (isOpen) {
-      setExecutionPhase('IDLE');
-      setExecStep(0);
-    }
+    if (!isOpen) return;
+    setExecutionPhase('IDLE');
+    setExecStep(0);
+    dialogRef.current?.focus();
   }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') closeIfIdle();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, closeIfIdle]);
 
   if (!isOpen || !action) return null;
 
@@ -59,11 +73,17 @@ export const AuthorizationModal: React.FC<AuthorizationModalProps> = ({
       >
         <motion.div
           id="authorization-modal-container"
+          ref={dialogRef}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="authorization-modal-title"
+          aria-describedby="authorization-modal-description"
+          tabIndex={-1}
           initial={{ opacity: 0, scale: 0.95, y: 15 }}
           animate={{ opacity: 1, scale: 1, y: 0 }}
           exit={{ opacity: 0, scale: 0.95, y: 15 }}
           transition={{ duration: 0.25, ease: 'easeOut' }}
-          className="w-full max-w-xl rounded-2xl border border-rose-200 bg-white p-6 shadow-2xl text-stone-800 sm:p-7"
+          className="w-full max-w-xl rounded-2xl border border-rose-200 bg-white p-6 shadow-2xl text-stone-800 outline-none sm:p-7"
         >
           {/* Top Header */}
           <div className="flex items-start justify-between border-b border-rose-100 pb-3.5">
@@ -73,20 +93,21 @@ export const AuthorizationModal: React.FC<AuthorizationModalProps> = ({
               </div>
               <div>
                 <div className="flex items-center gap-2">
-                  <h2 className="text-base font-black tracking-wide text-rose-950 uppercase sm:text-lg">
+                  <h2 id="authorization-modal-title" className="text-base font-black tracking-wide text-rose-950 uppercase sm:text-lg">
                     AUTHORIZATION REQUIRED
                   </h2>
                   <span className="rounded-full bg-rose-50 px-2.5 py-0.5 font-mono text-[9px] font-bold text-rose-800 uppercase border border-rose-200">
                     DEMO SIMULATION
                   </span>
                 </div>
-                <p className="text-xs text-rose-700 font-medium">Consequential real-world action boundary</p>
+                <p id="authorization-modal-description" className="text-xs text-rose-700 font-medium">Consequential real-world action boundary</p>
               </div>
             </div>
 
             {executionPhase !== 'EXECUTING' && (
               <button
-                onClick={onClose}
+                onClick={closeIfIdle}
+                aria-label="Close authorization dialog"
                 className="rounded-lg p-1.5 text-stone-400 hover:bg-stone-100 hover:text-stone-700 cursor-pointer transition-colors"
               >
                 <X className="h-5 w-5" />
@@ -95,7 +116,7 @@ export const AuthorizationModal: React.FC<AuthorizationModalProps> = ({
           </div>
 
           {/* Demo Simulation Notice */}
-          <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50/80 p-3.5 text-xs text-amber-900 shadow-xs">
+          <div id="authorization-modal-notice" className="mt-4 rounded-xl border border-amber-200 bg-amber-50/80 p-3.5 text-xs text-amber-900 shadow-xs">
             <span className="font-mono font-bold uppercase">HACKATHON SAFETY NOTICE: </span>
             <span className="leading-relaxed">
               This is a simulated execution. No real emergency services or external dispatchers will be contacted.
@@ -196,13 +217,13 @@ export const AuthorizationModal: React.FC<AuthorizationModalProps> = ({
           <div className="mt-6 flex items-center justify-end gap-3 border-t border-stone-100 pt-4">
             {executionPhase === 'IDLE' ? (
               <>
-                <motion.button
-                  id="btn-cancel-authorization"
-                  whileHover={{ scale: 1.02 }}
-                  whileTap={{ scale: 0.98 }}
-                  onClick={onClose}
-                  className="rounded-xl border border-stone-200 bg-white px-4 py-2.5 text-xs font-semibold text-stone-700 hover:bg-stone-50 shadow-xs cursor-pointer"
-                >
+<motion.button
+                    id="btn-cancel-authorization"
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                    onClick={closeIfIdle}
+                    className="rounded-xl border border-stone-200 bg-white px-4 py-2.5 text-xs font-semibold text-stone-700 hover:bg-stone-50 shadow-xs cursor-pointer"
+                  >
                   CANCEL
                 </motion.button>
                 <motion.button

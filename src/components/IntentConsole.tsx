@@ -2,6 +2,68 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Mic, MicOff, ImagePlus, X, Sparkles, AlertCircle, CornerDownLeft } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
+interface AttachedImage {
+  data: string;
+  mimeType: string;
+  name: string;
+  previewUrl: string;
+}
+
+interface SpeechRecognitionResultLike {
+  [index: number]: { transcript: string };
+}
+
+interface SpeechRecognitionEventLike {
+  resultIndex: number;
+  results: SpeechRecognitionResultLike[];
+}
+
+interface SpeechRecognitionErrorLike {
+  error?: string;
+}
+
+interface SpeechRecognitionLike {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  onstart: (() => void) | null;
+  onresult: ((event: SpeechRecognitionEventLike) => void) | null;
+  onerror: ((event: SpeechRecognitionErrorLike) => void) | null;
+  onend: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+}
+
+interface SpeechRecognitionConstructorLike {
+  new (): SpeechRecognitionLike;
+}
+
+function getSpeechRecognition(): SpeechRecognitionConstructorLike | null {
+  const w = window as unknown as {
+    SpeechRecognition?: SpeechRecognitionConstructorLike;
+    webkitSpeechRecognition?: SpeechRecognitionConstructorLike;
+  };
+  return w.SpeechRecognition || w.webkitSpeechRecognition || null;
+}
+
+function readImageFile(file: File): Promise<AttachedImage> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const base64String = reader.result as string;
+      const base64Data = base64String.split(',')[1];
+      resolve({
+        data: base64Data,
+        mimeType: file.type,
+        name: file.name,
+        previewUrl: base64String,
+      });
+    };
+    reader.onerror = () => reject(new Error('Failed to read image file.'));
+    reader.readAsDataURL(file);
+  });
+}
+
 interface IntentConsoleProps {
   input: string;
   onChangeInput: (val: string) => void;
@@ -21,29 +83,21 @@ export const IntentConsole: React.FC<IntentConsoleProps> = ({
   const [speechSupported, setSpeechSupported] = useState(true);
   const [speechError, setSpeechError] = useState<string | null>(null);
 
-  const [attachedImage, setAttachedImage] = useState<{
-    data: string;
-    mimeType: string;
-    name: string;
-    previewUrl: string;
-  } | null>(null);
+  const [attachedImage, setAttachedImage] = useState<AttachedImage | null>(null);
 
-  const recognitionRef = useRef<any>(null);
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Check speech recognition capability
   useEffect(() => {
-    const SpeechRecognition =
-      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognition) {
+    if (!getSpeechRecognition()) {
       setSpeechSupported(false);
     }
   }, []);
 
   const toggleVoiceInput = () => {
-    const SpeechRecognition =
-      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    const SpeechRecognition = getSpeechRecognition();
 
     if (!SpeechRecognition) {
       setSpeechError('Speech recognition is not supported in this browser environment.');
@@ -70,7 +124,7 @@ export const IntentConsole: React.FC<IntentConsoleProps> = ({
         setSpeechError(null);
       };
 
-      recognition.onresult = (event: any) => {
+      recognition.onresult = (event) => {
         let transcript = '';
         for (let i = event.resultIndex; i < event.results.length; ++i) {
           transcript += event.results[i][0].transcript;
@@ -80,7 +134,7 @@ export const IntentConsole: React.FC<IntentConsoleProps> = ({
         }
       };
 
-      recognition.onerror = (err: any) => {
+      recognition.onerror = (err) => {
         console.warn('Speech Recognition error:', err);
         setSpeechError(`Voice input error: ${err.error || 'Check microphone permissions'}`);
         setIsListening(false);
@@ -93,7 +147,7 @@ export const IntentConsole: React.FC<IntentConsoleProps> = ({
 
       recognitionRef.current = recognition;
       recognition.start();
-    } catch (e: any) {
+    } catch (e) {
       console.error('Speech initialization error:', e);
       setSpeechError('Could not access microphone.');
       setIsListening(false);
@@ -101,46 +155,35 @@ export const IntentConsole: React.FC<IntentConsoleProps> = ({
     }
   };
 
-  const handleImageFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
+  const attachImageFile = async (file: File, notifyOnInvalid = true) => {
     if (!file.type.startsWith('image/')) {
-      alert('Please upload a valid image file (PNG, JPG, WEBP).');
+      if (notifyOnInvalid) {
+        alert('Please upload a valid image file (PNG, JPG, WEBP).');
+      }
       return;
     }
-
-    const reader = new FileReader();
-    reader.onload = () => {
-      const base64String = reader.result as string;
-      const base64Data = base64String.split(',')[1];
-      setAttachedImage({
-        data: base64Data,
-        mimeType: file.type,
-        name: file.name,
-        previewUrl: base64String,
-      });
-    };
-    reader.readAsDataURL(file);
-    e.target.value = '';
+    try {
+      const image = await readImageFile(file);
+      setAttachedImage(image);
+    } catch {
+      if (notifyOnInvalid) {
+        alert('Could not read the selected image. Please try another file.');
+      }
+    }
   };
 
-  const handleDrop = (e: React.DragEvent) => {
+  const handleImageFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    await attachImageFile(file);
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     const file = e.dataTransfer.files?.[0];
-    if (file && file.type.startsWith('image/')) {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const base64String = reader.result as string;
-        const base64Data = base64String.split(',')[1];
-        setAttachedImage({
-          data: base64Data,
-          mimeType: file.type,
-          name: file.name,
-          previewUrl: base64String,
-        });
-      };
-      reader.readAsDataURL(file);
+    if (file) {
+      await attachImageFile(file, false);
     }
   };
 
